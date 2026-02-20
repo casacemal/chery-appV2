@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chery marka kırmızısı - launch_background.xml'de kullanılır -->
+    <color name="chery_red">#B71C1C</color>
+</resources>
