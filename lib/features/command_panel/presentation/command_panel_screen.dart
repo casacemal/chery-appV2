@@ -11,11 +11,14 @@ class CustomButton {
   final String name;
   final String command;
 
-  CustomButton({required this.name, required this.command});
+  const CustomButton({required this.name, required this.command});
 
   Map<String, dynamic> toJson() => {'name': name, 'command': command};
-  factory CustomButton.fromJson(Map<String, dynamic> json) =>
-      CustomButton(name: json['name'], command: json['command']);
+
+  factory CustomButton.fromJson(Map<String, dynamic> json) => CustomButton(
+        name: json['name'] as String? ?? '',
+        command: json['command'] as String? ?? '',
+      );
 }
 
 class CommandPanelScreen extends StatefulWidget {
@@ -29,8 +32,13 @@ class CommandPanelScreen extends StatefulWidget {
 
 class _CommandPanelScreenState extends State<CommandPanelScreen> {
   List<CustomButton> _customButtons = [];
+  bool _isExecuting = false;
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _commandController = TextEditingController();
+
+  static const String _prefsKey = 'custom_buttons_v2';
+  static const int _maxButtons = 20;
 
   @override
   void initState() {
@@ -38,68 +46,89 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
     _loadCustomButtons();
   }
 
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _commandController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadCustomButtons() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? buttonsJson = prefs.getString('custom_buttons_v2');
-    if (buttonsJson != null) {
-      final List<dynamic> decoded = jsonDecode(buttonsJson);
-      setState(() {
-        _customButtons =
-            decoded.map((item) => CustomButton.fromJson(item)).toList();
-      });
-    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? buttonsJson = prefs.getString(_prefsKey);
+      if (buttonsJson != null && mounted) {
+        final List<dynamic> decoded = jsonDecode(buttonsJson);
+        setState(() {
+          _customButtons = decoded
+              .map((item) =>
+                  CustomButton.fromJson(item as Map<String, dynamic>))
+              .where((b) => b.name.isNotEmpty && b.command.isNotEmpty)
+              .toList();
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _saveCustomButtons() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String encoded =
-        jsonEncode(_customButtons.map((b) => b.toJson()).toList());
-    await prefs.setString('custom_buttons_v2', encoded);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _prefsKey,
+        jsonEncode(_customButtons.map((b) => b.toJson()).toList()),
+      );
+    } catch (_) {}
   }
 
   Future<void> _addCustomButton() async {
-    if (_customButtons.length >= 20) {
-      Fluttertoast.showToast(msg: 'Maksimum 20 buton ekleyebilirsiniz');
+    if (_customButtons.length >= _maxButtons) {
+      Fluttertoast.showToast(msg: 'Maksimum $_maxButtons buton ekleyebilirsiniz');
       return;
     }
 
-    showDialog(
+    _nameController.clear();
+    _commandController.clear();
+
+    await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Yeni Buton Ekle'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Buton İsmi'),
+              decoration: const InputDecoration(
+                labelText: 'Buton İsmi',
+                hintText: 'örn: Ekran Açık',
+              ),
+              maxLength: 30,
             ),
+            const SizedBox(height: 8),
             TextField(
               controller: _commandController,
               decoration: const InputDecoration(
-                  labelText: 'ADB Komutu (shell olmadan)'),
+                labelText: 'ADB Shell Komutu',
+                hintText: 'örn: input keyevent 26',
+              ),
+              maxLength: 200,
             ),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('İPTAL'),
           ),
           ElevatedButton(
             onPressed: () {
-              if (_nameController.text.isNotEmpty &&
-                  _commandController.text.isNotEmpty) {
-                setState(() {
-                  _customButtons.add(CustomButton(
-                    name: _nameController.text,
-                    command: _commandController.text,
-                  ));
-                });
+              final name = _nameController.text.trim();
+              final cmd = _commandController.text.trim();
+              if (name.isNotEmpty && cmd.isNotEmpty) {
+                setState(() => _customButtons
+                    .add(CustomButton(name: name, command: cmd)));
                 _saveCustomButtons();
-                _nameController.clear();
-                _commandController.clear();
-                Navigator.pop(context);
+                Navigator.pop(ctx);
               }
             },
             child: const Text('EKLE'),
@@ -116,16 +145,25 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
           backgroundColor: AppConstants.errorRed);
       return;
     }
+    if (_isExecuting) return;
+
+    setState(() => _isExecuting = true);
     HapticFeedback.lightImpact();
-    final result = await widget.adbClient.executeCommand(command);
-    if (!result.success) {
-      Fluttertoast.showToast(
-          msg: 'Hata: ${result.error}', backgroundColor: AppConstants.errorRed);
+
+    try {
+      final result = await widget.adbClient.executeCommand(command);
+      if (mounted && !result.success) {
+        Fluttertoast.showToast(
+            msg: 'Hata: ${result.error}',
+            backgroundColor: AppConstants.errorRed);
+      }
+    } finally {
+      if (mounted) setState(() => _isExecuting = false);
     }
   }
 
   Future<void> _sendKey(KeyCodes keyCode) async {
-    _executeCommand(keyCode.inputCommand);
+    await _executeCommand(keyCode.inputCommand);
   }
 
   @override
@@ -134,6 +172,16 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
       appBar: AppBar(
         title: const Text('KOMUT PANELİ'),
         actions: [
+          if (_isExecuting)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.add_box),
             onPressed: _addCustomButton,
@@ -149,12 +197,14 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
           Row(
             children: [
               Expanded(
-                  child: _buildKeyButton('GERİ', Icons.arrow_back,
-                      KeyCodes.keyCodeBack, AppConstants.primaryRed)),
+                child: _buildKeyButton('GERİ', Icons.arrow_back,
+                    KeyCodes.keyCodeBack, AppConstants.primaryRed),
+              ),
               const SizedBox(width: 12),
               Expanded(
-                  child: _buildKeyButton('ANA MENÜ', Icons.home,
-                      KeyCodes.keyCodeHome, AppConstants.primaryRed)),
+                child: _buildKeyButton('ANA MENÜ', Icons.home,
+                    KeyCodes.keyCodeHome, AppConstants.primaryRed),
+              ),
             ],
           ),
           const SizedBox(height: 24),
@@ -163,79 +213,29 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
           Row(
             children: [
               Expanded(
-                  child: _buildKeyButton('SES +', Icons.volume_up,
-                      KeyCodes.keyCodeVolumeUp, AppConstants.successGreen)),
+                child: _buildKeyButton('SES +', Icons.volume_up,
+                    KeyCodes.keyCodeVolumeUp, AppConstants.successGreen),
+              ),
               const SizedBox(width: 12),
               Expanded(
-                  child: _buildKeyButton('SES -', Icons.volume_down,
-                      KeyCodes.keyCodeVolumeDown, AppConstants.successGreen)),
+                child: _buildKeyButton('SES -', Icons.volume_down,
+                    KeyCodes.keyCodeVolumeDown, AppConstants.successGreen),
+              ),
               const SizedBox(width: 12),
               Expanded(
-                  child: _buildKeyButton('GÜÇ', Icons.power_settings_new,
-                      KeyCodes.keyCodePower, AppConstants.warningOrange)),
+                child: _buildKeyButton('GÜÇ', Icons.power_settings_new,
+                    KeyCodes.keyCodePower, AppConstants.warningOrange),
+              ),
             ],
           ),
           const SizedBox(height: 24),
           _buildSectionHeader('D-PAD'),
           _buildDPad(),
           const SizedBox(height: 24),
-          _buildSectionHeader('ÖZEL BUTONLAR (${_customButtons.length}/20)'),
+          _buildSectionHeader(
+              'ÖZEL BUTONLAR (${_customButtons.length}/$_maxButtons)'),
           const SizedBox(height: 12),
-          if (_customButtons.isEmpty)
-            const Center(
-                child: Text('Henüz özel buton eklenmedi',
-                    style: TextStyle(color: Colors.grey)))
-          else
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 3,
-              ),
-              itemCount: _customButtons.length,
-              itemBuilder: (context, index) {
-                final btn = _customButtons[index];
-                return Stack(
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      height: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () => _executeCommand(btn.command),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey[800],
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                        ),
-                        child: Text(btn.name,
-                            textAlign: TextAlign.center,
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                    Positioned(
-                      top: 0,
-                      right: 0,
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() => _customButtons.removeAt(index));
-                          _saveCustomButtons();
-                        },
-                        child: Container(
-                          decoration: const BoxDecoration(
-                              color: Colors.red, shape: BoxShape.circle),
-                          child: const Icon(Icons.close,
-                              size: 16, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+          _buildCustomButtons(),
         ],
       ),
     );
@@ -250,11 +250,12 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
   Widget _buildKeyButton(
       String label, IconData icon, KeyCodes key, Color color) {
     return ElevatedButton.icon(
-      onPressed: () => _sendKey(key),
+      onPressed: _isExecuting ? null : () => _sendKey(key),
       icon: Icon(icon, size: 18),
       label: Text(label, style: const TextStyle(fontSize: 12)),
       style: ElevatedButton.styleFrom(
         backgroundColor: color,
+        disabledBackgroundColor: color.withAlpha(100),
         padding: const EdgeInsets.symmetric(vertical: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
@@ -269,30 +270,33 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
         child: Stack(
           children: [
             Positioned(
-                top: 0,
-                left: 60,
-                child: _buildDPadBtn(
-                    Icons.arrow_upward, KeyCodes.keyCodeDpadUp)),
+              top: 0,
+              left: 60,
+              child: _buildDPadBtn(Icons.arrow_upward, KeyCodes.keyCodeDpadUp),
+            ),
             Positioned(
-                bottom: 0,
-                left: 60,
-                child: _buildDPadBtn(
-                    Icons.arrow_downward, KeyCodes.keyCodeDpadDown)),
+              bottom: 0,
+              left: 60,
+              child: _buildDPadBtn(
+                  Icons.arrow_downward, KeyCodes.keyCodeDpadDown),
+            ),
             Positioned(
-                left: 0,
-                top: 60,
-                child: _buildDPadBtn(
-                    Icons.arrow_back, KeyCodes.keyCodeDpadLeft)),
+              left: 0,
+              top: 60,
+              child: _buildDPadBtn(Icons.arrow_back, KeyCodes.keyCodeDpadLeft),
+            ),
             Positioned(
-                right: 0,
-                top: 60,
-                child: _buildDPadBtn(
-                    Icons.arrow_forward, KeyCodes.keyCodeDpadRight)),
+              right: 0,
+              top: 60,
+              child: _buildDPadBtn(
+                  Icons.arrow_forward, KeyCodes.keyCodeDpadRight),
+            ),
             Positioned(
-                top: 60,
-                left: 60,
-                child: _buildDPadBtn(Icons.circle, KeyCodes.keyCodeDpadCenter,
-                    isCenter: true)),
+              top: 60,
+              left: 60,
+              child: _buildDPadBtn(Icons.circle, KeyCodes.keyCodeDpadCenter,
+                  isCenter: true),
+            ),
           ],
         ),
       ),
@@ -304,13 +308,87 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
       color: isCenter ? AppConstants.primaryRed : AppConstants.surfaceDark,
       borderRadius: BorderRadius.circular(isCenter ? 30 : 8),
       child: InkWell(
-        onTap: () => _sendKey(key),
+        onTap: _isExecuting ? null : () => _sendKey(key),
         borderRadius: BorderRadius.circular(isCenter ? 30 : 8),
         child: SizedBox(
-            width: 60,
-            height: 60,
-            child: Icon(icon, color: Colors.white, size: isCenter ? 28 : 24)),
+          width: 60,
+          height: 60,
+          child: Icon(
+            icon,
+            color: _isExecuting ? Colors.white38 : Colors.white,
+            size: isCenter ? 28 : 24,
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _buildCustomButtons() {
+    if (_customButtons.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Text(
+            'Henüz özel buton eklenmedi.\nSağ üstteki + butonuna tıklayın.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: 3,
+      ),
+      itemCount: _customButtons.length,
+      itemBuilder: (context, index) {
+        final btn = _customButtons[index];
+        return Stack(
+          children: [
+            SizedBox(
+              width: double.infinity,
+              height: double.infinity,
+              child: ElevatedButton(
+                onPressed:
+                    _isExecuting ? null : () => _executeCommand(btn.command),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueGrey[800],
+                  disabledBackgroundColor: Colors.blueGrey[900],
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                child: Text(btn.name,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() => _customButtons.removeAt(index));
+                  _saveCustomButtons();
+                },
+                child: Container(
+                  decoration: const BoxDecoration(
+                      color: Colors.red, shape: BoxShape.circle),
+                  child:
+                      const Icon(Icons.close, size: 16, color: Colors.white),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
