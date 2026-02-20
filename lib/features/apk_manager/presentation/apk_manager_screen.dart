@@ -16,6 +16,13 @@ class APKManagerScreen extends StatefulWidget {
 class _APKManagerScreenState extends State<APKManagerScreen> {
   String? _lastInstalledPackage;
   bool _isInstalling = false;
+  final TextEditingController _packageController = TextEditingController();
+
+  @override
+  void dispose() {
+    _packageController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickAndInstallAPK() async {
     if (!widget.adbClient.isConnected) {
@@ -35,6 +42,9 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
 
     final apkPath = result.files.single.path!;
 
+    // Kurulum öncesi paket listesi
+    final packagesBefore = await widget.adbClient.getInstalledPackages();
+
     setState(() => _isInstalling = true);
 
     Fluttertoast.showToast(
@@ -45,19 +55,42 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
 
     final installResult = await widget.adbClient.installAPK(apkPath);
 
-    setState(() => _isInstalling = false);
-
     if (installResult.success) {
-      // Try to extract package name from output
-      final packageName = _extractPackageName(installResult.output);
-      setState(() => _lastInstalledPackage = packageName);
+      // Kurulum sonrası paket listesi → fark = yeni paket
+      final packagesAfter = await widget.adbClient.getInstalledPackages();
+      final newPackages = packagesAfter
+          .where((p) => !packagesBefore.contains(p))
+          .toList();
 
-      Fluttertoast.showToast(
-        msg: '✓ APK başarıyla yüklendi',
-        backgroundColor: AppConstants.successGreen,
-        toastLength: Toast.LENGTH_LONG,
-      );
+      String? detectedPackage;
+      if (newPackages.length == 1) {
+        detectedPackage = newPackages.first;
+      }
+
+      if (mounted) {
+        setState(() {
+          _isInstalling = false;
+          _lastInstalledPackage = detectedPackage;
+        });
+      }
+
+      if (detectedPackage != null) {
+        Fluttertoast.showToast(
+          msg: '✓ APK başarıyla yüklendi: $detectedPackage',
+          backgroundColor: AppConstants.successGreen,
+          toastLength: Toast.LENGTH_LONG,
+        );
+      } else {
+        // Otomatik tespit başarısız → kullanıcıdan manuel giriş iste
+        Fluttertoast.showToast(
+          msg: '✓ APK yüklendi. Paket adını manuel girin.',
+          backgroundColor: AppConstants.warningOrange,
+          toastLength: Toast.LENGTH_LONG,
+        );
+        await _askPackageName(apkPath);
+      }
     } else {
+      if (mounted) setState(() => _isInstalling = false);
       Fluttertoast.showToast(
         msg: '✗ Yükleme başarısız: ${installResult.error}',
         backgroundColor: AppConstants.errorRed,
@@ -66,11 +99,57 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
     }
   }
 
-  String? _extractPackageName(String output) {
-    // Try to find package name from install output
-    final regex = RegExp(r'package:([^\s]+)');
-    final match = regex.firstMatch(output);
-    return match?.group(1);
+  /// Otomatik tespit başarısız olursa kullanıcıdan paket adı ister
+  Future<void> _askPackageName(String apkPath) async {
+    // APK dosya adından tahmin yürüt (örn: "com.example.app-1.0.apk" → "com.example.app")
+    final fileName = apkPath.split('/').last.replaceAll('.apk', '');
+    _packageController.text = fileName.contains('.') ? fileName : '';
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Paket Adı'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paket adı otomatik tespit edilemedi.\n'
+              'İzin vermek için paket adını girin:',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _packageController,
+              decoration: const InputDecoration(
+                labelText: 'Paket Adı',
+                hintText: 'com.example.app',
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Atla'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final pkg = _packageController.text.trim();
+              if (pkg.isNotEmpty) {
+                setState(() => _lastInstalledPackage = pkg);
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Tamam'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _grantAllPermissions() async {
@@ -92,24 +171,20 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
         _lastInstalledPackage!,
         permission,
       );
-
-      if (success) {
-        granted++;
-      } else {
-        failed++;
-      }
+      if (success) granted++; else failed++;
     }
 
-    // Grant SYSTEM_ALERT_WINDOW via appops
+    // SYSTEM_ALERT_WINDOW via appops
     await widget.adbClient.executeCommand(
       'appops set $_lastInstalledPackage SYSTEM_ALERT_WINDOW allow',
     );
 
-    setState(() => _isInstalling = false);
+    if (mounted) setState(() => _isInstalling = false);
 
     Fluttertoast.showToast(
-      msg: '✓ $granted izin verildi, $failed başarısız',
-      backgroundColor: AppConstants.successGreen,
+      msg: '✓ $granted izin verildi${failed > 0 ? ', $failed başarısız' : ''}',
+      backgroundColor:
+          failed == 0 ? AppConstants.successGreen : AppConstants.warningOrange,
       toastLength: Toast.LENGTH_LONG,
     );
   }
@@ -134,22 +209,17 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  const Icon(
-                    Icons.upload_file,
-                    size: 64,
-                    color: AppConstants.primaryRed,
-                  ),
+                  const Icon(Icons.upload_file,
+                      size: 64, color: AppConstants.primaryRed),
                   const SizedBox(height: 16),
                   const Text(
                     'APK YÜKLEME',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style:
+                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Telefonnuzdan APK dosyası seçip araca yükleyin',
+                    'Telefonunuzdan APK dosyası seçip araca yükleyin',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey[400]),
                   ),
@@ -163,17 +233,14 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                                  strokeWidth: 2, color: Colors.white),
                             )
                           : const Icon(Icons.folder_open),
-                      label: Text(
-                        _isInstalling ? 'Yükleniyor...' : 'APK Dosyası Seç ve Yükle',
-                      ),
+                      label: Text(_isInstalling
+                          ? 'Yükleniyor...'
+                          : 'APK Dosyası Seç ve Yükle'),
                       style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.all(20),
-                      ),
+                          padding: const EdgeInsets.all(20)),
                     ),
                   ),
                 ],
@@ -191,17 +258,13 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
                   children: [
                     const Row(
                       children: [
-                        Icon(
-                          Icons.check_circle,
-                          color: AppConstants.successGreen,
-                        ),
+                        Icon(Icons.check_circle,
+                            color: AppConstants.successGreen),
                         SizedBox(width: 12),
                         Text(
                           'Son Yüklenen Paket',
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
+                              fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -221,7 +284,8 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: _isInstalling ? null : _grantAllPermissions,
+                        onPressed:
+                            _isInstalling ? null : _grantAllPermissions,
                         icon: const Icon(Icons.security),
                         label: const Text('Tüm İzinleri Ver'),
                         style: ElevatedButton.styleFrom(
@@ -242,19 +306,15 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
                   (perm) => ListTile(
                     dense: true,
                     leading: const Icon(Icons.check, size: 16),
-                    title: Text(
-                      perm.split('.').last,
-                      style: const TextStyle(fontSize: 13),
-                    ),
+                    title: Text(perm.split('.').last,
+                        style: const TextStyle(fontSize: 13)),
                   ),
                 ),
                 const ListTile(
                   dense: true,
                   leading: Icon(Icons.check, size: 16),
-                  title: Text(
-                    'SYSTEM_ALERT_WINDOW',
-                    style: TextStyle(fontSize: 13),
-                  ),
+                  title: Text('SYSTEM_ALERT_WINDOW',
+                      style: TextStyle(fontSize: 13)),
                 ),
               ],
             ),
