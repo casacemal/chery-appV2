@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import '../../shared/models/models.dart';
 import '../logger/black_box_logger.dart';
@@ -11,11 +12,9 @@ class NetworkScanner {
 
   Future<String?> getPhoneIP() async {
     try {
-      final wifiIP = await _networkInfo.getWifiIP();
-      return wifiIP;
+      return await _networkInfo.getWifiIP();
     } catch (e) {
-      // ignore: avoid_print
-      print('Error getting phone IP: $e');
+      debugPrint('Error getting phone IP: $e'); // ✅ print → debugPrint
       return null;
     }
   }
@@ -24,9 +23,8 @@ class NetworkScanner {
     try {
       final parts = ipAddress.split('.');
       if (parts.length != 4) return null;
-
       return '${parts[0]}.${parts[1]}.${parts[2]}';
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
@@ -54,24 +52,21 @@ class NetworkScanner {
     final List<DeviceInfo> devices = [];
     final futures = <Future>[];
 
-    // Scan from .1 to .254
     for (int i = 1; i <= 254; i++) {
       final ip = '$subnet.$i';
 
       futures.add(_checkDevice(ip).then((device) {
-        if (device != null) {
-          devices.add(device);
-        }
+        if (device != null) devices.add(device);
       }));
 
-      // Batch processing to avoid overwhelming the system
+      // Batch işlem: sistemi yormamak için 50'şerli gruplar
       if (i % 50 == 0) {
         await Future.wait(futures);
         futures.clear();
       }
     }
 
-    await Future.wait(futures);
+    if (futures.isNotEmpty) await Future.wait(futures);
 
     await _logger.log(
       operation: LogOperation.scan,
@@ -84,29 +79,25 @@ class NetworkScanner {
 
   Future<DeviceInfo?> _checkDevice(String ip) async {
     try {
-      // Try to connect to ADB port first (fastest)
       bool port5555Open = false;
       try {
         final socket = await Socket.connect(
           ip,
           AppConstants.adbDefaultPort,
-          timeout: const Duration(milliseconds: 500), // Very fast check
+          timeout: const Duration(milliseconds: 500),
         );
         port5555Open = true;
         await socket.close();
-      } catch (e) {
-        port5555Open = false;
+      } catch (_) {
+        // Port kapalı, normal durum
       }
 
       if (port5555Open) {
-        // Port is open, try ADB handshake
         final adbResponding = await _testADBConnection(ip);
         String? modelName;
-
         if (adbResponding) {
           modelName = await _getDeviceModel(ip);
         }
-
         return DeviceInfo(
           ipAddress: ip,
           port: AppConstants.adbDefaultPort,
@@ -114,28 +105,26 @@ class NetworkScanner {
           modelName: modelName,
         );
       } else {
-        // Port 5555 closed, check if host is alive at all
         if (await _isHostAlive(ip)) {
           return DeviceInfo(
             ipAddress: ip,
-            port: 0, // No specific port
+            port: 0,
             status: DeviceStatus.offline,
             modelName: await _getHostname(ip),
           );
         }
       }
       return null;
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
   Future<bool> _isHostAlive(String ip) async {
     try {
-      // Try ping
       final result = await Process.run('ping', ['-c', '1', '-W', '1', ip]);
       return result.exitCode == 0;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
@@ -144,7 +133,7 @@ class NetworkScanner {
     try {
       final address = await InternetAddress(ip).reverse();
       return address.host != ip ? address.host : null;
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
@@ -153,19 +142,15 @@ class NetworkScanner {
     try {
       final result = await Process.run(
         'adb',
-        [
-          '-s',
-          '$ip:${AppConstants.adbDefaultPort}',
-          'shell',
-          'getprop ro.product.model'
-        ],
-      ).timeout(const Duration(seconds: 1));
+        ['-s', '$ip:${AppConstants.adbDefaultPort}', 'shell', 'getprop ro.product.model'],
+      ).timeout(const Duration(seconds: 2));
 
       if (result.exitCode == 0) {
-        return result.stdout.toString().trim();
+        final model = result.stdout.toString().trim();
+        return model.isNotEmpty ? model : null;
       }
-    } catch (e) {
-      // Ignore ADB model fetch errors
+    } catch (_) {
+      // ADB model sorgusu başarısız, önemli değil
     }
     return null;
   }
@@ -178,29 +163,24 @@ class NetworkScanner {
       ).timeout(const Duration(seconds: 2));
 
       return result.stdout.toString().contains('connected');
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
   Future<DeviceInfo?> quickCheck(String ip, int port) async {
     try {
-      final socket = await Socket.connect(
-        ip,
-        port,
-        timeout: const Duration(seconds: 2),
-      );
-
+      final socket = await Socket.connect(ip, port,
+          timeout: const Duration(seconds: 2));
       await socket.close();
 
       final adbResponding = await _testADBConnection(ip);
-
       return DeviceInfo(
         ipAddress: ip,
         port: port,
         status: adbResponding ? DeviceStatus.ready : DeviceStatus.portOpen,
       );
-    } catch (e) {
+    } catch (_) {
       return DeviceInfo(
         ipAddress: ip,
         port: port,
