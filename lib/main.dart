@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'features/dashboard/presentation/dashboard_screen.dart';
 import 'core/constants/app_constants.dart';
 
-void main() {
+void main() async {
+  // Firebase veya native plugin kullanan tüm paketler için zorunlu
+  WidgetsFlutterBinding.ensureInitialized();
+
   runApp(const CheryMasterControllerApp());
 }
 
