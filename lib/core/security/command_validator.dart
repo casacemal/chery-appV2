@@ -1,18 +1,8 @@
 import '../constants/app_constants.dart';
 
 class CommandValidator {
-  /// Validates if a command is safe to execute
   static ValidationResult validate(String command) {
-    // Length check
-    if (command.length > 512) {
-      return ValidationResult(
-        isValid: false,
-        error: 'Komut çok uzun (max 512 karakter)',
-        level: ValidationLevel.error,
-      );
-    }
-
-    // Empty command
+    // Boş komut
     if (command.trim().isEmpty) {
       return ValidationResult(
         isValid: false,
@@ -21,10 +11,19 @@ class CommandValidator {
       );
     }
 
-    final trimmed = command.trim();
-    final firstWord = trimmed.split(' ').first;
+    // Uzunluk kontrolü
+    if (command.length > 512) {
+      return ValidationResult(
+        isValid: false,
+        error: 'Komut çok uzun (max 512 karakter)',
+        level: ValidationLevel.error,
+      );
+    }
 
-    // Whitelist check
+    final trimmed = command.trim();
+    final firstWord = trimmed.split(' ').first.toLowerCase();
+
+    // Whitelist: ilk kelime izin verilen komutlardan biri olmalı
     if (!AppConstants.whitelistCommands.contains(firstWord)) {
       return ValidationResult(
         isValid: false,
@@ -33,28 +32,46 @@ class CommandValidator {
       );
     }
 
-    // Blacklist pattern check
-    for (final pattern in AppConstants.blacklistPatterns) {
-      if (trimmed.contains(pattern)) {
+    // Tehlikeli karakter kontrolü (pipe, chaining)
+    for (final char in AppConstants.dangerousChars) {
+      if (trimmed.contains(char)) {
         return ValidationResult(
           isValid: false,
-          error: 'Tehlikeli karakter dizisi tespit edildi: $pattern',
+          error: 'Tehlikeli karakter tespit edildi: $char',
           level: ValidationLevel.error,
         );
       }
     }
 
-    // SQL Injection check
-    if (trimmed.contains("'") || trimmed.contains('"') || trimmed.contains('`')) {
+    // Blacklist pattern kontrolü
+    for (final pattern in AppConstants.blacklistPatterns) {
+      if (trimmed.contains(pattern)) {
+        return ValidationResult(
+          isValid: false,
+          error: 'Tehlikeli komut tespit edildi: $pattern',
+          level: ValidationLevel.error,
+        );
+      }
+    }
+
+    // 'su' tam kelime bazlı kontrol
+    // "dumpsys", "settings" gibi içinde "su" geçen komutlara izin verir
+    final words = trimmed.split(RegExp(r'\s+'));
+    if (words.contains('su')) {
       return ValidationResult(
         isValid: false,
-        error: 'Şüpheli karakter (tırnak işareti)',
-        level: ValidationLevel.warning,
+        error: 'su komutu direkt kullanılamaz',
+        level: ValidationLevel.error,
       );
     }
 
-    // Critical commands - require confirmation
-    final criticalKeywords = ['reboot', 'setprop persist', 'pm uninstall', 'format'];
+    // Kritik komutlar - onay gerektirir
+    const criticalKeywords = [
+      'reboot',
+      'setprop persist',
+      'pm uninstall',
+      'format',
+    ];
     for (final keyword in criticalKeywords) {
       if (trimmed.contains(keyword)) {
         return ValidationResult(
@@ -86,11 +103,7 @@ class ValidationResult {
   });
 }
 
-enum ValidationLevel {
-  success,
-  warning,
-  error,
-}
+enum ValidationLevel { success, warning, error }
 
 class RateLimiter {
   final int maxRequestsPerSecond;
@@ -101,19 +114,11 @@ class RateLimiter {
   bool canExecute() {
     final now = DateTime.now();
     final oneSecondAgo = now.subtract(const Duration(seconds: 1));
-    
-    // Remove old requests
-    _requestTimes.removeWhere((time) => time.isBefore(oneSecondAgo));
-    
-    if (_requestTimes.length >= maxRequestsPerSecond) {
-      return false;
-    }
-    
+    _requestTimes.removeWhere((t) => t.isBefore(oneSecondAgo));
+    if (_requestTimes.length >= maxRequestsPerSecond) return false;
     _requestTimes.add(now);
     return true;
   }
 
-  void reset() {
-    _requestTimes.clear();
-  }
+  void reset() => _requestTimes.clear();
 }
