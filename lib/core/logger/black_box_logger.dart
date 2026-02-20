@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import '../constants/app_constants.dart';
@@ -14,15 +15,12 @@ class BlackBoxLogger {
   final DateFormat _fileNameFormat = DateFormat('yyyyMMdd');
 
   Future<File> _getLogFile() async {
-    if (_currentLogFile != null && await _currentLogFile!.exists()) {
-      final today = _fileNameFormat.format(DateTime.now());
-      final currentFileName = _fileNameFormat.format(
-        DateTime.parse(_currentLogFile!.path.split('_').last.split('.').first),
-      );
+    final today = _fileNameFormat.format(DateTime.now());
 
-      if (today == currentFileName) {
-        return _currentLogFile!;
-      }
+    // Mevcut dosya bugünün dosyasıysa tekrar oluşturma
+    if (_currentLogFile != null && await _currentLogFile!.exists()) {
+      final fileName = _currentLogFile!.uri.pathSegments.last;
+      if (fileName.contains(today)) return _currentLogFile!;
     }
 
     final directory = await getApplicationDocumentsDirectory();
@@ -32,10 +30,8 @@ class BlackBoxLogger {
       await logsDir.create(recursive: true);
     }
 
-    final today = _fileNameFormat.format(DateTime.now());
     final fileName = '${AppConstants.logFilePrefix}$today.txt';
     _currentLogFile = File('${logsDir.path}/$fileName');
-
     return _currentLogFile!;
   }
 
@@ -51,7 +47,6 @@ class BlackBoxLogger {
       final file = await _getLogFile();
       final timestamp = _dateFormat.format(DateTime.now());
 
-      // Escape details and output to keep them on one line in the text file
       final safeDetails = details.replaceAll('\n', ' ');
       final safeCommand = command?.replaceAll('\n', ' ') ?? '';
       final safeOutput =
@@ -63,8 +58,7 @@ class BlackBoxLogger {
 
       await file.writeAsString(logLine, mode: FileMode.append);
     } catch (e) {
-      // ignore: avoid_print
-      print('Logger error: $e');
+      debugPrint('Logger error: $e'); // ✅ print → debugPrint
     }
   }
 
@@ -73,9 +67,7 @@ class BlackBoxLogger {
       final directory = await getApplicationDocumentsDirectory();
       final logsDir = Directory('${directory.path}/logs');
 
-      if (!await logsDir.exists()) {
-        return [];
-      }
+      if (!await logsDir.exists()) return [];
 
       final List<LogEntry> allLogs = [];
       final files = logsDir
@@ -83,7 +75,7 @@ class BlackBoxLogger {
           .where((f) => f.path.endsWith('.txt'))
           .map((f) => File(f.path))
           .toList()
-        ..sort((a, b) => b.path.compareTo(a.path)); // Newest first
+        ..sort((a, b) => b.path.compareTo(a.path));
 
       for (final file in files) {
         final lines = await file.readAsLines();
@@ -95,8 +87,7 @@ class BlackBoxLogger {
 
       return allLogs;
     } catch (e) {
-      // ignore: avoid_print
-      print('Error reading logs: $e');
+      debugPrint('Error reading logs: $e'); // ✅ print → debugPrint
       return [];
     }
   }
@@ -111,13 +102,13 @@ class BlackBoxLogger {
       final status = parts[2];
       final deviceIp = parts[3] == 'N/A' ? null : parts[3];
       final details = parts[4];
-      final command = parts.length > 5 ? parts[5] : null;
+      final command = parts.length > 5 && parts[5].isNotEmpty ? parts[5] : null;
       String? output;
 
       if (parts.length > 6 && parts[6].isNotEmpty) {
         try {
           output = utf8.decode(base64Decode(parts[6]));
-        } catch (e) {
+        } catch (_) {
           output = parts[6];
         }
       }
@@ -131,7 +122,7 @@ class BlackBoxLogger {
         command: command,
         output: output,
       );
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
@@ -149,9 +140,8 @@ class BlackBoxLogger {
           .map((f) => File(f.path))
           .toList();
 
-      final cutoffDate = DateTime.now().subtract(
-        const Duration(days: AppConstants.logRetentionDays),
-      );
+      final cutoffDate = DateTime.now()
+          .subtract(const Duration(days: AppConstants.logRetentionDays));
 
       for (final file in files) {
         final stat = await file.stat();
@@ -161,8 +151,7 @@ class BlackBoxLogger {
         }
       }
     } catch (e) {
-      // ignore: avoid_print
-      print('Cleanup error: $e');
+      debugPrint('Cleanup error: $e'); // ✅ print → debugPrint
     }
   }
 }
