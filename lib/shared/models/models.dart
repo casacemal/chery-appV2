@@ -46,7 +46,7 @@ class DeviceInfo {
     return {
       'ipAddress': ipAddress,
       'port': port,
-      'status': status.toString(),
+      'status': status.name, // ✅ .name kullan, daha temiz parse
       'modelName': modelName,
       'androidVersion': androidVersion,
       'lastConnected': lastConnected?.toIso8601String(),
@@ -56,48 +56,48 @@ class DeviceInfo {
 
   factory DeviceInfo.fromJson(Map<String, dynamic> json) {
     return DeviceInfo(
-      ipAddress: json['ipAddress'],
-      port: json['port'] ?? 5555,
+      ipAddress: json['ipAddress'] as String? ?? '0.0.0.0', // ✅ null-safe
+      port: json['port'] as int? ?? 5555,
       status: DeviceStatus.values.firstWhere(
-        (e) => e.toString() == json['status'],
+        (e) => e.name == json['status'],
         orElse: () => DeviceStatus.offline,
       ),
-      modelName: json['modelName'],
-      androidVersion: json['androidVersion'],
+      modelName: json['modelName'] as String?,
+      androidVersion: json['androidVersion'] as String?,
       lastConnected: json['lastConnected'] != null
-          ? DateTime.parse(json['lastConnected'])
+          ? DateTime.tryParse(json['lastConnected'] as String) // ✅ tryParse
           : null,
-      isFavorite: json['isFavorite'] ?? false,
+      isFavorite: json['isFavorite'] as bool? ?? false,
     );
   }
 }
 
 enum DeviceStatus {
-  ready, // Port open + ADB responding (GREEN)
-  portOpen, // Port open but no ADB response (YELLOW)
-  offline, // Port closed (RED)
-  connecting, // Currently connecting
-  connected, // Successfully connected
+  ready,    // Port açık + ADB yanıt veriyor → YEŞİL
+  portOpen, // Port açık ama ADB yanıt yok  → SARI
+  offline,  // Port kapalı / ulaşılamıyor   → GRİ
 }
 
 class CommandResult {
   final bool success;
   final String output;
   final String? error;
-  final DateTime timestamp;
   final String command;
+  final DateTime timestamp;
 
   CommandResult({
     required this.success,
     required this.output,
     this.error,
     required this.command,
-  }) : timestamp = DateTime.now();
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
 
-  String get formattedOutput {
-    if (success) return output;
-    return error ?? 'Unknown error';
-  }
+  String get formattedOutput =>
+      success ? output.trim() : (error?.trim() ?? 'Bilinmeyen hata');
+
+  bool get hasOutput => output.trim().isNotEmpty;
+  bool get hasError => error != null && error!.trim().isNotEmpty;
 }
 
 class AppPackage {
@@ -107,7 +107,7 @@ class AppPackage {
   final DateTime? installDate;
   final bool isSystemApp;
 
-  AppPackage({
+  const AppPackage({
     required this.packageName,
     this.appName,
     this.version,
@@ -116,4 +116,7 @@ class AppPackage {
   });
 
   String get displayName => appName ?? packageName;
+
+  @override
+  String toString() => displayName;
 }
