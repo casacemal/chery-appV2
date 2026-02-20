@@ -28,7 +28,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadPhoneIP() async {
     final ip = await _scanner.getPhoneIP();
-    setState(() => _phoneIP = ip);
+    if (mounted) setState(() => _phoneIP = ip);
   }
 
   @override
@@ -45,8 +45,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Text(AppConstants.appName),
               ],
             ),
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(56),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(56),
               child: Container(
                 padding: const EdgeInsets.all(12),
                 color: AppConstants.surfaceDark,
@@ -60,8 +60,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         const SizedBox(width: 4),
                         Text(
                           'TEL: ${_phoneIP ?? "..."}',
-                          style:
-                              const TextStyle(fontSize: 12, color: Colors.grey),
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.grey),
                         ),
                       ],
                     ),
@@ -130,7 +130,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CommandPanelScreen(adbClient: _adbClient),
+                    builder: (_) =>
+                        CommandPanelScreen(adbClient: _adbClient),
                   ),
                 ),
               ),
@@ -200,7 +201,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withAlpha(77), // withOpacity(0.3)
+              color: Colors.black.withAlpha(77),
               blurRadius: 8,
               offset: const Offset(0, 4),
             ),
@@ -225,7 +226,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               subtitle,
               style: TextStyle(
                 fontSize: 12,
-                color: Colors.white.withAlpha(230), // withOpacity(0.9)
+                color: Colors.white.withAlpha(230),
               ),
               textAlign: TextAlign.center,
             ),
