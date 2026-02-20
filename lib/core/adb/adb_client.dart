@@ -14,6 +14,7 @@ class ADBClient extends ChangeNotifier {
   String? _connectedIp;
   int? _connectedPort;
   bool _useRoot = false;
+
   final _logger = BlackBoxLogger();
   final _rateLimiter = RateLimiter();
 
@@ -21,10 +22,10 @@ class ADBClient extends ChangeNotifier {
   String? get connectedDevice => _connectedIp;
   bool get useRoot => _useRoot;
 
+  // ─── Root Yönetimi ───────────────────────────────────────────────────────
+
   Future<bool> enableRoot() async {
-    if (!isConnected) {
-      return false;
-    }
+    if (!isConnected) return false;
 
     try {
       final result = await Process.run(
@@ -32,21 +33,52 @@ class ADBClient extends ChangeNotifier {
         ['-s', '$_connectedIp:$_connectedPort', 'root'],
       ).timeout(const Duration(seconds: 10));
 
-      if (result.exitCode == 0) {
+      final stdout = result.stdout.toString().trim();
+      final stderr = result.stderr.toString().trim();
+
+      // "adbd is already running as root" veya "restarting adbd as root" başarılı sayılır.
+      // "Production builds" veya "cannot run as root" başarısız.
+      final isSuccess = result.exitCode == 0 &&
+          !stdout.contains('cannot') &&
+          !stdout.contains('Production builds') &&
+          !stderr.contains('cannot') &&
+          !stderr.contains('Production builds');
+
+      if (isSuccess) {
+        // ADB daemon yeniden başlıyor, bağlantının yerine oturması için bekle
+        if (stdout.contains('restarting')) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
+
         _useRoot = true;
         notifyListeners();
 
         await _logger.log(
           operation: LogOperation.connection,
-          details: 'Root mode etkinleştirildi',
+          details: 'Root mode etkinleştirildi: $stdout',
           status: LogStatus.success,
           deviceIp: _connectedIp,
         );
         return true;
       } else {
+        // adb root başarısız → Magisk/SuperSU üzerinden su -c dene
+        final suCheck = await _checkSuAvailable();
+        if (suCheck) {
+          _useRoot = true;
+          notifyListeners();
+
+          await _logger.log(
+            operation: LogOperation.connection,
+            details: 'Root mode su üzerinden etkinleştirildi',
+            status: LogStatus.success,
+            deviceIp: _connectedIp,
+          );
+          return true;
+        }
+
         await _logger.log(
           operation: LogOperation.error,
-          details: 'Root mode başarısız: ${result.stderr}',
+          details: 'Root mode başarısız. stdout: $stdout | stderr: $stderr',
           status: LogStatus.failed,
           deviceIp: _connectedIp,
         );
@@ -63,33 +95,90 @@ class ADBClient extends ChangeNotifier {
     }
   }
 
+  /// Cihazda su binary'si var mı ve çalışıyor mu kontrol eder
+  Future<bool> _checkSuAvailable() async {
+    try {
+      final result = await Process.run(
+        'adb',
+        ['-s', '$_connectedIp:$_connectedPort', 'shell', 'su -c "id"'],
+      ).timeout(const Duration(seconds: 5));
+
+      final output = result.stdout.toString();
+      // "uid=0(root)" dönüyorsa su çalışıyor
+      return result.exitCode == 0 && output.contains('uid=0');
+    } catch (_) {
+      return false;
+    }
+  }
+
   void disableRoot() {
     _useRoot = false;
     notifyListeners();
   }
 
+  // ─── Bağlantı ────────────────────────────────────────────────────────────
+
   Future<bool> connect(String ip, int port) async {
-    try {
-      final socket =
-          await Socket.connect(ip, port, timeout: const Duration(seconds: 5));
-      await socket.close();
-
-      _connectedIp = ip;
-      _connectedPort = port;
-
+    // IP formatı basit doğrulama
+    final ipRegex = RegExp(
+        r'^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$');
+    if (!ipRegex.hasMatch(ip) || port < 1 || port > 65535) {
       await _logger.log(
         operation: LogOperation.connection,
-        details: 'Connected to $ip:$port',
-        status: LogStatus.success,
+        details: 'Geçersiz IP veya port: $ip:$port',
+        status: LogStatus.failed,
         deviceIp: ip,
       );
+      return false;
+    }
 
-      notifyListeners();
-      return true;
+    try {
+      // Önce TCP ile port açık mı kontrol et
+      final socket = await Socket.connect(
+        ip,
+        port,
+        timeout: const Duration(seconds: 5),
+      );
+      await socket.close();
+
+      // Gerçek ADB bağlantısını kur ve doğrula
+      final result = await Process.run(
+        'adb',
+        ['connect', '$ip:$port'],
+      ).timeout(const Duration(seconds: 10));
+
+      final stdout = result.stdout.toString().trim();
+
+      // "connected to x.x.x.x:port" veya "already connected" başarılı sayılır
+      final isSuccess = result.exitCode == 0 &&
+          (stdout.contains('connected to') ||
+              stdout.contains('already connected'));
+
+      if (isSuccess) {
+        _connectedIp = ip;
+        _connectedPort = port;
+
+        await _logger.log(
+          operation: LogOperation.connection,
+          details: 'Bağlandı: $ip:$port | $stdout',
+          status: LogStatus.success,
+          deviceIp: ip,
+        );
+        notifyListeners();
+        return true;
+      } else {
+        await _logger.log(
+          operation: LogOperation.connection,
+          details: 'ADB bağlantısı reddedildi: $stdout',
+          status: LogStatus.failed,
+          deviceIp: ip,
+        );
+        return false;
+      }
     } catch (e) {
       await _logger.log(
         operation: LogOperation.connection,
-        details: 'Failed to connect: $e',
+        details: 'Bağlantı hatası: $e',
         status: LogStatus.failed,
         deviceIp: ip,
       );
@@ -99,18 +188,29 @@ class ADBClient extends ChangeNotifier {
 
   Future<void> disconnect() async {
     if (_connectedIp != null) {
+      // ADB bağlantısını da düzgün kapat
+      try {
+        await Process.run(
+          'adb',
+          ['disconnect', '$_connectedIp:$_connectedPort'],
+        ).timeout(const Duration(seconds: 5));
+      } catch (_) {}
+
       await _logger.log(
         operation: LogOperation.disconnection,
-        details: 'Disconnected from $_connectedIp',
+        details: 'Bağlantı kesildi: $_connectedIp',
         status: LogStatus.success,
         deviceIp: _connectedIp,
       );
     }
+
     _connectedIp = null;
     _connectedPort = null;
     _useRoot = false;
     notifyListeners();
   }
+
+  // ─── Komut Çalıştırma ────────────────────────────────────────────────────
 
   Future<CommandResult> executeCommand(String command) async {
     if (!isConnected) {
@@ -140,7 +240,6 @@ class ADBClient extends ChangeNotifier {
         command: command,
         deviceIp: _connectedIp,
       );
-
       return CommandResult(
         success: false,
         command: command,
@@ -150,9 +249,12 @@ class ADBClient extends ChangeNotifier {
     }
 
     try {
-      // Root mode aktif ise doğrudan komut çalıştır
-      // (adb root komutu ile daemon root olarak başlatıldı)
-      final actualCommand = command;
+      // ✅ Root mode aktifse su -c ile sarmala
+      // adb root (daemon root) kullanılıyorsa düz komut gönderilir.
+      // Magisk/SuperSU (su -c) kullanılıyorsa komut sarmalanır.
+      final bool isDaemonRoot = _useRoot && await _isDaemonRoot();
+      final String actualCommand =
+          (_useRoot && !isDaemonRoot) ? 'su -c "$command"' : command;
 
       final result = await Process.run(
         'adb',
@@ -167,7 +269,7 @@ class ADBClient extends ChangeNotifier {
 
       await _logger.log(
         operation: LogOperation.command,
-        details: 'Komut çalıştırıldı',
+        details: 'Komut çalıştırıldı${_useRoot ? " [ROOT]" : ""}',
         status: success ? LogStatus.success : LogStatus.failed,
         command: actualCommand,
         output: combinedOutput,
@@ -188,7 +290,6 @@ class ADBClient extends ChangeNotifier {
         command: command,
         deviceIp: _connectedIp,
       );
-
       return CommandResult(
         success: false,
         command: command,
@@ -198,23 +299,47 @@ class ADBClient extends ChangeNotifier {
     }
   }
 
+  /// ADB daemon'ın root olarak çalışıp çalışmadığını kontrol eder
+  Future<bool> _isDaemonRoot() async {
+    try {
+      final result = await Process.run(
+        'adb',
+        ['-s', '$_connectedIp:$_connectedPort', 'shell', 'id'],
+      ).timeout(const Duration(seconds: 5));
+      return result.stdout.toString().contains('uid=0');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ─── APK & İzin ──────────────────────────────────────────────────────────
+
   Future<CommandResult> installAPK(String apkPath) async {
     if (!isConnected) {
       return CommandResult(
-          success: false,
-          command: 'install',
-          output: '',
-          error: 'Cihaz bağlı değil');
+        success: false,
+        command: 'install',
+        output: '',
+        error: 'Cihaz bağlı değil',
+      );
     }
 
     try {
       final result = await Process.run(
         'adb',
-        ['-s', '$_connectedIp:$_connectedPort', 'install', '-r', '-g', apkPath],
+        [
+          '-s',
+          '$_connectedIp:$_connectedPort',
+          'install',
+          '-r',
+          '-g',
+          apkPath
+        ],
       ).timeout(const Duration(minutes: 5));
 
       final success = result.exitCode == 0;
-      final output = result.stdout.toString() + result.stderr.toString();
+      final output =
+          result.stdout.toString() + result.stderr.toString();
 
       await _logger.log(
         operation: LogOperation.apkInstall,
@@ -233,27 +358,30 @@ class ADBClient extends ChangeNotifier {
       );
     } catch (e) {
       return CommandResult(
-          success: false, command: 'install', output: '', error: e.toString());
+        success: false,
+        command: 'install',
+        output: '',
+        error: e.toString(),
+      );
     }
   }
 
-  Future<bool> grantPermission(String packageName, String permission) async {
-    final result = await executeCommand('pm grant $packageName $permission');
-
+  Future<bool> grantPermission(
+      String packageName, String permission) async {
+    final result =
+        await executeCommand('pm grant $packageName $permission');
     await _logger.log(
       operation: LogOperation.permissionGrant,
       details: '$packageName - $permission',
       status: result.success ? LogStatus.success : LogStatus.failed,
       deviceIp: _connectedIp,
     );
-
     return result.success;
   }
 
   Future<List<String>> getInstalledPackages() async {
     final result = await executeCommand('pm list packages -3');
     if (!result.success) return [];
-
     return result.output
         .split('\n')
         .where((line) => line.startsWith('package:'))
