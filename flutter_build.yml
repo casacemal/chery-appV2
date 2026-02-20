@@ -1,0 +1,36 @@
+name: Flutter Build
+
+on:
+  push:
+    branches: [ "main", "master" ] # Hangi branch'i kullanıyorsan
+  workflow_dispatch: # Bu satır sayesinde manuel olarak da başlatabilirsin
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Java Setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Flutter Setup
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --debug # İlk deneme için debug en hızlısıdır
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chery-uygulama
+          path: build/app/outputs/flutter-apk/*.apk

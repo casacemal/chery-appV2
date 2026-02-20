@@ -1,0 +1,1 @@
+her zaman türkçe cevap ver.
