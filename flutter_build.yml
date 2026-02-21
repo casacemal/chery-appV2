@@ -22,8 +22,7 @@ jobs:
         with:
           channel: 'stable'
           cache: true
-      - name: Get Packages
-        run: flutter clean
+
       - name: Get Packages
         run: flutter pub get
 
