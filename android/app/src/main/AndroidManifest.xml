@@ -3,24 +3,22 @@
 
     <!-- ─── Ağ İzinleri ─────────────────────────────────────────────────── -->
     <!-- ADB TCP bağlantısı ve genel internet erişimi -->
-    <uses-permission android:name="android.permission.INTERNET"/>
+ <!-- Ağ -->
+<uses-permission android:name="android.permission.INTERNET"/>
+<uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+<uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- WiFi IP adresi alma (NetworkScanner.getPhoneIP için zorunlu) -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+<!-- WiFi IP için (Android 10+) -->
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
 
-    <!-- Ağ durumu kontrolü -->
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+<!-- Dosya (APK seçimi) -->
+<uses-permission
+    android:name="android.permission.READ_EXTERNAL_STORAGE"
+    android:maxSdkVersion="32"/>
 
-    <!-- ─── Dosya İzinleri ───────────────────────────────────────────────── -->
-    <!-- APK seçimi için (Android 12 ve altı) -->
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"/>
-
-    <!-- APK seçimi için (Android 13+) -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-
+<!-- APK kurulumu -->
+<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="Chery Master Controller"
         android:name="${applicationName}"
