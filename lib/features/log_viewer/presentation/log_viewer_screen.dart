@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart'; // Provider paketini ekledik
 import '../../../core/logger/black_box_logger.dart';
 
 class LogViewerScreen extends StatefulWidget {
@@ -10,7 +11,6 @@ class LogViewerScreen extends StatefulWidget {
 }
 
 class _LogViewerScreenState extends State<LogViewerScreen> {
-  final BlackBoxLogger _logger = BlackBoxLogger();
   List<LogEntry> _logs = [];
   bool _isLoading = true;
 
@@ -22,7 +22,14 @@ class _LogViewerScreenState extends State<LogViewerScreen> {
 
   Future<void> _loadLogs() async {
     setState(() => _isLoading = true);
-    final logs = await _logger.getAllLogs();
+    
+    // BlackBoxLogger'ı asenkron işlemden önce context üzerinden alıyoruz
+    final logger = context.read<BlackBoxLogger>();
+    final logs = await logger.getAllLogs();
+    
+    // Asenkron işlem sonrasında widget'ın hala ekranda olup olmadığını kontrol ediyoruz
+    if (!mounted) return;
+    
     setState(() {
       _logs = logs;
       _isLoading = false;
