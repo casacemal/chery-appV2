@@ -2,20 +2,18 @@ import '../constants/app_constants.dart';
 
 class CommandValidator {
   static ValidationResult validate(String command) {
-    // Boş komut
     if (command.trim().isEmpty) {
       return ValidationResult(
         isValid: false,
-        error: 'Boş komut',
+        error: 'Komut boş olamaz.',
         level: ValidationLevel.error,
       );
     }
 
-    // Uzunluk kontrolü
     if (command.length > 512) {
       return ValidationResult(
         isValid: false,
-        error: 'Komut çok uzun (max 512 karakter)',
+        error: 'Komut çok uzun (max 512 karakter).',
         level: ValidationLevel.error,
       );
     }
@@ -23,60 +21,78 @@ class CommandValidator {
     final trimmed = command.trim();
     final firstWord = trimmed.split(' ').first.toLowerCase();
 
-    // Whitelist: ilk kelime izin verilen komutlardan biri olmalı
+    // ── Whitelist: ilk kelime izin verilenlerden biri olmalı
     if (!AppConstants.whitelistCommands.contains(firstWord)) {
       return ValidationResult(
         isValid: false,
-        error: 'İzin verilmeyen komut: $firstWord',
+        error: '"$firstWord" komutu bu sistemde desteklenmiyor.\n\n'
+            'İzin verilen komutlar:\n'
+            '• input keyevent / tap / swipe / text\n'
+            '• am start / force-stop / broadcast\n'
+            '• pm list / grant / enable / disable / clear\n'
+            '• settings get / put (global, system, secure)\n'
+            '• getprop / setprop\n'
+            '• wm size / density\n'
+            '• dumpsys / service / cmd\n'
+            '• svc power / wifi / bluetooth\n'
+            '• screencap / logcat / reboot\n'
+            '• ls / ps / df / cat / id',
         level: ValidationLevel.error,
       );
     }
 
-    // Tehlikeli karakter kontrolü (pipe, chaining)
+    // ── Tehlikeli karakterler (injection önlemi)
     for (final char in AppConstants.dangerousChars) {
       if (trimmed.contains(char)) {
         return ValidationResult(
           isValid: false,
-          error: 'Tehlikeli karakter tespit edildi: $char',
+          error: 'Güvenlik: "$char" karakteri kullanılamaz.\n'
+              'Her satıra yalnızca tek bir komut yazın.',
           level: ValidationLevel.error,
         );
       }
     }
 
-    // Blacklist pattern kontrolü
+    // ── Blacklist pattern kontrolü
     for (final pattern in AppConstants.blacklistPatterns) {
-      if (trimmed.contains(pattern)) {
+      if (trimmed.toLowerCase().contains(pattern.toLowerCase())) {
         return ValidationResult(
           isValid: false,
-          error: 'Tehlikeli komut tespit edildi: $pattern',
+          error: 'Tehlikeli komut engellendi: "$pattern"\n'
+              'Bu komut araç sistemine zarar verebilir.',
           level: ValidationLevel.error,
         );
       }
     }
 
-    // 'su' tam kelime bazlı kontrol
-    // "dumpsys", "settings" gibi içinde "su" geçen komutlara izin verir
+    // ── "su" tek başına kullanılamaz (root shell zaten açık tutuluyor)
     final words = trimmed.split(RegExp(r'\s+'));
-    if (words.contains('su')) {
+    if (words.length == 1 && words.first == 'su') {
       return ValidationResult(
         isValid: false,
-        error: 'su komutu direkt kullanılamaz',
+        error: '"su" komutunu doğrudan göndermeyin.\n'
+            'Root işlemleri için ayarlar ekranından\n'
+            '"Root Modu Etkinleştir" seçeneğini kullanın.',
         level: ValidationLevel.error,
       );
     }
 
-    // Kritik komutlar - onay gerektirir
+    // ── Kritik komutlar: onay gerektirir
     const criticalKeywords = [
       'reboot',
       'setprop persist',
       'pm uninstall',
-      'format',
+      'pm disable',
+      'pm clear',
+      'wm size',
+      'wm density',
     ];
     for (final keyword in criticalKeywords) {
-      if (trimmed.contains(keyword)) {
+      if (trimmed.toLowerCase().contains(keyword)) {
         return ValidationResult(
           isValid: true,
-          warning: 'Bu kritik bir komut. Emin misiniz?',
+          warning: '"${keyword.toUpperCase()}" kritik bir komuttur.\n'
+              'Araç sistemi etkilenebilir. Devam etmek istiyor musunuz?',
           level: ValidationLevel.warning,
           requiresConfirmation: true,
         );
