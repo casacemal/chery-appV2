@@ -7,6 +7,20 @@ import '../../../core/adb/adb_client.dart';
 import '../../../core/constants/key_codes.dart';
 import '../../../core/constants/app_constants.dart';
 
+// ─── Terminal Satırı Modeli ───────────────────────────────────────────────────
+
+enum TerminalLineType { command, output, error, info }
+
+class TerminalLine {
+  final String text;
+  final TerminalLineType type;
+  final DateTime time;
+
+  TerminalLine({required this.text, required this.type}) : time = DateTime.now();
+}
+
+// ─── Custom Button Modeli ────────────────────────────────────────────────────
+
 class CustomButton {
   final String name;
   final String command;
@@ -21,6 +35,8 @@ class CustomButton {
       );
 }
 
+// ─── Ana Ekran ────────────────────────────────────────────────────────────────
+
 class CommandPanelScreen extends StatefulWidget {
   final ADBClient adbClient;
 
@@ -34,24 +50,149 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
   List<CustomButton> _customButtons = [];
   bool _isExecuting = false;
 
+  // Terminal
+  final List<TerminalLine> _terminalLines = [];
+  final ScrollController _terminalScroll = ScrollController();
+  final TextEditingController _terminalInputController = TextEditingController();
+  final FocusNode _terminalFocusNode = FocusNode();
+  final List<String> _commandHistory = [];
+  int _historyIndex = -1;
+
+  // Dialog controllers
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _commandController = TextEditingController();
 
   static const String _prefsKey = 'custom_buttons_v2';
   static const int _maxButtons = 20;
+  static const int _maxTerminalLines = 200;
 
   @override
   void initState() {
     super.initState();
     _loadCustomButtons();
+    _addTerminalLine('Terminal hazır. Cihaza bağlanın.', TerminalLineType.info);
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _commandController.dispose();
+    _terminalInputController.dispose();
+    _terminalScroll.dispose();
+    _terminalFocusNode.dispose();
     super.dispose();
   }
+
+  // ─── Terminal ──────────────────────────────────────────────────────────────
+
+  void _addTerminalLine(String text, TerminalLineType type) {
+    setState(() {
+      _terminalLines.add(TerminalLine(text: text, type: type));
+      // Max satır sınırı
+      if (_terminalLines.length > _maxTerminalLines) {
+        _terminalLines.removeRange(0, _terminalLines.length - _maxTerminalLines);
+      }
+    });
+    // Sona kaydır
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_terminalScroll.hasClients) {
+        _terminalScroll.animateTo(
+          _terminalScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _clearTerminal() {
+    setState(() => _terminalLines.clear());
+    _addTerminalLine('Terminal temizlendi.', TerminalLineType.info);
+  }
+
+  Future<void> _submitTerminalCommand() async {
+    final command = _terminalInputController.text.trim();
+    if (command.isEmpty) return;
+
+    _terminalInputController.clear();
+    _commandHistory.insert(0, command);
+    _historyIndex = -1;
+
+    await _executeCommand(command);
+    _terminalFocusNode.requestFocus();
+  }
+
+  void _navigateHistory(bool up) {
+    if (_commandHistory.isEmpty) return;
+    setState(() {
+      if (up) {
+        _historyIndex = (_historyIndex + 1).clamp(0, _commandHistory.length - 1);
+      } else {
+        _historyIndex--;
+        if (_historyIndex < 0) {
+          _historyIndex = -1;
+          _terminalInputController.clear();
+          return;
+        }
+      }
+      _terminalInputController.text = _commandHistory[_historyIndex];
+      _terminalInputController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _terminalInputController.text.length),
+      );
+    });
+  }
+
+  // ─── Komut Çalıştırma ─────────────────────────────────────────────────────
+
+  Future<void> _executeCommand(String command) async {
+    if (!widget.adbClient.isConnected) {
+      _addTerminalLine('HATA: Önce bir cihaza bağlanın!', TerminalLineType.error);
+      Fluttertoast.showToast(
+          msg: 'Önce bir cihaza bağlanın!',
+          backgroundColor: AppConstants.errorRed);
+      return;
+    }
+    if (_isExecuting) return;
+
+    // Komutu terminale yaz
+    _addTerminalLine('> $command', TerminalLineType.command);
+
+    setState(() => _isExecuting = true);
+    HapticFeedback.lightImpact();
+
+    try {
+      final result = await widget.adbClient.executeCommand(command);
+
+      if (result.success) {
+        final output = result.output.trim();
+        if (output.isNotEmpty) {
+          // Çok satırlı çıktıyı satır satır ekle
+          for (final line in output.split('\n')) {
+            if (line.trim().isNotEmpty) {
+              _addTerminalLine(line, TerminalLineType.output);
+            }
+          }
+        } else {
+          _addTerminalLine('OK', TerminalLineType.output);
+        }
+      } else {
+        _addTerminalLine('HATA: ${result.error}', TerminalLineType.error);
+        if (mounted) {
+          Fluttertoast.showToast(
+              msg: 'Hata: ${result.error}',
+              backgroundColor: AppConstants.errorRed);
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isExecuting = false);
+    }
+  }
+
+  Future<void> _sendKey(KeyCodes keyCode) async {
+    await _executeCommand(keyCode.inputCommand);
+  }
+
+  // ─── Custom Buttons ───────────────────────────────────────────────────────
 
   Future<void> _loadCustomButtons() async {
     try {
@@ -138,33 +279,7 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
     );
   }
 
-  Future<void> _executeCommand(String command) async {
-    if (!widget.adbClient.isConnected) {
-      Fluttertoast.showToast(
-          msg: 'Önce bir cihaza bağlanın!',
-          backgroundColor: AppConstants.errorRed);
-      return;
-    }
-    if (_isExecuting) return;
-
-    setState(() => _isExecuting = true);
-    HapticFeedback.lightImpact();
-
-    try {
-      final result = await widget.adbClient.executeCommand(command);
-      if (mounted && !result.success) {
-        Fluttertoast.showToast(
-            msg: 'Hata: ${result.error}',
-            backgroundColor: AppConstants.errorRed);
-      }
-    } finally {
-      if (mounted) setState(() => _isExecuting = false);
-    }
-  }
-
-  Future<void> _sendKey(KeyCodes keyCode) async {
-    await _executeCommand(keyCode.inputCommand);
-  }
+  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -192,6 +307,11 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // ── Terminal ──────────────────────────────────────────────────────
+          _buildTerminal(),
+          const SizedBox(height: 24),
+
+          // ── Ana Navigasyon ────────────────────────────────────────────────
           _buildSectionHeader('ANA NAVİGASYON'),
           const SizedBox(height: 12),
           Row(
@@ -208,6 +328,8 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
             ],
           ),
           const SizedBox(height: 24),
+
+          // ── Ses & Güç ─────────────────────────────────────────────────────
           _buildSectionHeader('SES & GÜÇ'),
           const SizedBox(height: 12),
           Row(
@@ -229,9 +351,13 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
             ],
           ),
           const SizedBox(height: 24),
+
+          // ── D-Pad ─────────────────────────────────────────────────────────
           _buildSectionHeader('D-PAD'),
           _buildDPad(),
           const SizedBox(height: 24),
+
+          // ── Özel Butonlar ─────────────────────────────────────────────────
           _buildSectionHeader(
               'ÖZEL BUTONLAR (${_customButtons.length}/$_maxButtons)'),
           const SizedBox(height: 12),
@@ -240,6 +366,178 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
       ),
     );
   }
+
+  // ─── Terminal Widget ──────────────────────────────────────────────────────
+
+  Widget _buildTerminal() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D0D),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2A2A2A), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Başlık bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.terminal, size: 16, color: Color(0xFF4CAF50)),
+                const SizedBox(width: 8),
+                const Text(
+                  'TERMINAL',
+                  style: TextStyle(
+                    color: Color(0xFF4CAF50),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const Spacer(),
+                // Temizle butonu
+                GestureDetector(
+                  onTap: _clearTerminal,
+                  child: const Icon(Icons.cleaning_services,
+                      size: 16, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+
+          // Çıktı alanı
+          SizedBox(
+            height: 200,
+            child: _terminalLines.isEmpty
+                ? const Center(
+                    child: Text('Henüz çıktı yok',
+                        style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  )
+                : ListView.builder(
+                    controller: _terminalScroll,
+                    padding: const EdgeInsets.all(10),
+                    itemCount: _terminalLines.length,
+                    itemBuilder: (context, index) {
+                      final line = _terminalLines[index];
+                      return _buildTerminalLine(line);
+                    },
+                  ),
+          ),
+
+          // Ayraç
+          const Divider(height: 1, color: Color(0xFF2A2A2A)),
+
+          // Input alanı
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              children: [
+                const Text(
+                  '\$ ',
+                  style: TextStyle(
+                    color: Color(0xFF4CAF50),
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Expanded(
+                  child: RawKeyboardListener(
+                    focusNode: FocusNode(),
+                    onKey: (event) {
+                      if (event is RawKeyDownEvent) {
+                        if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                          _navigateHistory(true);
+                        } else if (event.logicalKey ==
+                            LogicalKeyboardKey.arrowDown) {
+                          _navigateHistory(false);
+                        }
+                      }
+                    },
+                    child: TextField(
+                      controller: _terminalInputController,
+                      focusNode: _terminalFocusNode,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
+                      decoration: const InputDecoration(
+                        hintText: 'komut yaz...',
+                        hintStyle:
+                            TextStyle(color: Colors.grey, fontSize: 13),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      onSubmitted: (_) => _submitTerminalCommand(),
+                      textInputAction: TextInputAction.send,
+                    ),
+                  ),
+                ),
+                // Gönder butonu
+                GestureDetector(
+                  onTap: _isExecuting ? null : _submitTerminalCommand,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: _isExecuting
+                          ? Colors.grey[800]
+                          : AppConstants.primaryRed,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(Icons.send, size: 16, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTerminalLine(TerminalLine line) {
+    Color color;
+    String prefix = '';
+
+    switch (line.type) {
+      case TerminalLineType.command:
+        color = const Color(0xFF64B5F6); // Mavi — gönderilen komut
+        break;
+      case TerminalLineType.output:
+        color = const Color(0xFFE0E0E0); // Beyaz — çıktı
+        break;
+      case TerminalLineType.error:
+        color = const Color(0xFFEF5350); // Kırmızı — hata
+        prefix = '✗ ';
+        break;
+      case TerminalLineType.info:
+        color = const Color(0xFF9E9E9E); // Gri — bilgi
+        prefix = '# ';
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Text(
+        '$prefix${line.text}',
+        style: TextStyle(
+          color: color,
+          fontFamily: 'monospace',
+          fontSize: 12,
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+
+  // ─── Diğer Widget'lar ─────────────────────────────────────────────────────
 
   Widget _buildSectionHeader(String title) {
     return Text(title,
@@ -283,7 +581,8 @@ class _CommandPanelScreenState extends State<CommandPanelScreen> {
             Positioned(
               left: 0,
               top: 60,
-              child: _buildDPadBtn(Icons.arrow_back, KeyCodes.keyCodeDpadLeft),
+              child:
+                  _buildDPadBtn(Icons.arrow_back, KeyCodes.keyCodeDpadLeft),
             ),
             Positioned(
               right: 0,
