@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fluttertoast/fluttertoast.dart';
+import 'package:provider/provider.dart'; // Provider paketini ekledik
 import '../../../core/adb/adb_client.dart';
 import '../../../core/constants/app_constants.dart';
 
 class APKManagerScreen extends StatefulWidget {
-  final ADBClient adbClient;
-
-  const APKManagerScreen({super.key, required this.adbClient});
+  // adbClient parametresini constructor'dan kaldırdık
+  const APKManagerScreen({super.key});
 
   @override
   State<APKManagerScreen> createState() => _APKManagerScreenState();
@@ -25,7 +25,10 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
   }
 
   Future<void> _pickAndInstallAPK() async {
-    if (!widget.adbClient.isConnected) {
+    // Asenkron işlemlerden önce adbClient'ı context üzerinden alıyoruz
+    final adbClient = context.read<ADBClient>();
+
+    if (!adbClient.isConnected) {
       Fluttertoast.showToast(
         msg: 'Önce bir cihaza bağlanın!',
         backgroundColor: AppConstants.errorRed,
@@ -43,7 +46,7 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
     final apkPath = result.files.single.path!;
 
     // Kurulum öncesi paket listesi
-    final packagesBefore = await widget.adbClient.getInstalledPackages();
+    final packagesBefore = await adbClient.getInstalledPackages();
 
     setState(() => _isInstalling = true);
 
@@ -53,11 +56,11 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
       toastLength: Toast.LENGTH_LONG,
     );
 
-    final installResult = await widget.adbClient.installAPK(apkPath);
+    final installResult = await adbClient.installAPK(apkPath);
 
     if (installResult.success) {
       // Kurulum sonrası paket listesi → fark = yeni paket
-      final packagesAfter = await widget.adbClient.getInstalledPackages();
+      final packagesAfter = await adbClient.getInstalledPackages();
       final newPackages = packagesAfter
           .where((p) => !packagesBefore.contains(p))
           .toList();
@@ -163,11 +166,14 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
 
     setState(() => _isInstalling = true);
 
+    // Asenkron işlemlerden önce adbClient'ı context üzerinden alıyoruz
+    final adbClient = context.read<ADBClient>();
+
     int granted = 0;
     int failed = 0;
 
     for (final permission in AppConstants.criticalPermissions) {
-      final success = await widget.adbClient.grantPermission(
+      final success = await adbClient.grantPermission(
         _lastInstalledPackage!,
         permission,
       );
@@ -175,7 +181,7 @@ class _APKManagerScreenState extends State<APKManagerScreen> {
     }
 
     // SYSTEM_ALERT_WINDOW via appops
-    await widget.adbClient.executeCommand(
+    await adbClient.executeCommand(
       'appops set $_lastInstalledPackage SYSTEM_ALERT_WINDOW allow',
     );
 
