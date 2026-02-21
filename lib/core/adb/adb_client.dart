@@ -17,6 +17,9 @@ class ADBClient extends ChangeNotifier {
   int? _connectedPort;
   bool _useRoot = false;
 
+  // Hata mesajlarını tutacak değişkeni ekledik
+  String? lastConnectionError;
+
   // ─── Kalıcı su Oturumu ───────────────────────────────────────────────────
   Process? _suProcess;
   StreamSubscription? _suStdoutSub;
@@ -236,12 +239,15 @@ class ADBClient extends ChangeNotifier {
   // ─── Bağlantı ────────────────────────────────────────────────────────────
 
   Future<bool> connect(String ip, int port) async {
+    lastConnectionError = null; // Her yeni denemede hatayı sıfırla
+
     final ipRegex = RegExp(
         r'^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$');
     if (!ipRegex.hasMatch(ip) || port < 1 || port > 65535) {
+      lastConnectionError = 'Geçersiz IP veya port: $ip:$port';
       await _logger.log(
         operation: LogOperation.connection,
-        details: 'Geçersiz IP veya port: $ip:$port',
+        details: lastConnectionError!,
         status: LogStatus.failed,
         deviceIp: ip,
       );
@@ -280,6 +286,7 @@ class ADBClient extends ChangeNotifier {
         return true;
       }
 
+      lastConnectionError = 'ADB bağlantısı reddedildi:\n$stdout';
       await _logger.log(
         operation: LogOperation.connection,
         details: 'ADB bağlantısı reddedildi: $stdout',
@@ -288,6 +295,7 @@ class ADBClient extends ChangeNotifier {
       );
       return false;
     } catch (e) {
+      lastConnectionError = 'Bağlantı hatası:\n$e';
       await _logger.log(
         operation: LogOperation.connection,
         details: 'Bağlantı hatası: $e',
@@ -341,6 +349,7 @@ class ADBClient extends ChangeNotifier {
           error: 'Çok fazla istek. Lütfen bekleyin.');
     }
 
+    // command validasyonu ile engellenen blok
     final validation = CommandValidator.validate(command);
     if (!validation.isValid) {
       await _logger.log(
