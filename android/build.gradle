@@ -6,10 +6,10 @@ allprojects {
 }
 
 // Deprecated rootProject.buildDir yerine layout kullan
-val buildDir = rootProject.layout.buildDirectory.get().asFile
+val buildDir = rootProject.buildDir.buildDirectory.get().asFile
 
 subprojects {
-    project.layout.buildDirectory.set(
+    project.buildDir.buildDirectory.set(
         rootProject.layout.buildDirectory.dir(project.name)
     )
 }
