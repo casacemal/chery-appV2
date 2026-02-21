@@ -9,8 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-    assets:
-      - assets/adb
+  
   
   # ADB Communication
   # pure_adb: ^0.1.0  # TODO: Add when available
@@ -45,3 +44,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/adb
