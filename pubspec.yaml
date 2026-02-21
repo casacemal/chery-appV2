@@ -9,7 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
+  provider: ^6.1.2
   
   # ADB Communication
   # pure_adb: ^0.1.0  # TODO: Add when available
