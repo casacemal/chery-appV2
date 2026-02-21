@@ -7,6 +7,7 @@ import '../../emergency_recovery/presentation/emergency_recovery_screen.dart';
 import '../../apk_manager/presentation/apk_manager_screen.dart';
 import '../../command_panel/presentation/command_panel_screen.dart';
 import '../../log_viewer/presentation/log_viewer_screen.dart';
+import '../../ai_settings/presentation/ai_settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -97,91 +98,162 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
-          body: GridView.count(
-            crossAxisCount: 2,
+          body: Padding(
             padding: const EdgeInsets.all(16),
-            mainAxisSpacing: 16,
-            crossAxisSpacing: 16,
-            children: [
-              _buildFeatureCard(
-                title: 'CİHAZ TARAMA',
-                subtitle: 'Araçları bul',
-                icon: Icons.radar,
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1E88E5), Color(0xFF1565C0)],
-                ),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => DeviceScannerScreen(
-                      scanner: _scanner,
-                      adbClient: _adbClient,
-                    ),
+            child: Column(
+              children: [
+                // ── Ana Kartlar (2x2) ──────────────────────────────────────
+                Expanded(
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 16,
+                    crossAxisSpacing: 16,
+                    children: [
+                      _buildFeatureCard(
+                        title: 'CİHAZ TARAMA',
+                        subtitle: 'Araçları bul',
+                        icon: Icons.radar,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF1E88E5), Color(0xFF1565C0)],
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DeviceScannerScreen(
+                              scanner: _scanner,
+                              adbClient: _adbClient,
+                            ),
+                          ),
+                        ),
+                      ),
+                      _buildFeatureCard(
+                        title: 'KOMUT PANELİ',
+                        subtitle: 'Kontrol & Butonlar',
+                        icon: Icons.gamepad,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFF57C00), Color(0xFFFF9800)],
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                CommandPanelScreen(adbClient: _adbClient),
+                          ),
+                        ),
+                      ),
+                      _buildFeatureCard(
+                        title: 'APK YÖNETİMİ',
+                        subtitle: 'Uygulama yükle',
+                        icon: Icons.android,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF388E3C), Color(0xFF4CAF50)],
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                APKManagerScreen(adbClient: _adbClient),
+                          ),
+                        ),
+                      ),
+                      _buildFeatureCard(
+                        title: 'SİSTEM GÜNLÜKLERİ',
+                        subtitle: 'Log & Çıktılar',
+                        icon: Icons.terminal,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF607D8B), Color(0xFF455A64)],
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const LogViewerScreen(),
+                          ),
+                        ),
+                      ),
+                      _buildFeatureCard(
+                        title: 'ACİL KURTARMA',
+                        subtitle: 'Launcher düzelt',
+                        icon: Icons.warning_amber,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFB71C1C), Color(0xFFD32F2F)],
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                EmergencyRecoveryScreen(adbClient: _adbClient),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              _buildFeatureCard(
-                title: 'KOMUT PANELİ',
-                subtitle: 'Kontrol & Butonlar',
-                icon: Icons.gamepad,
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFF57C00), Color(0xFFFF9800)],
-                ),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        CommandPanelScreen(adbClient: _adbClient),
-                  ),
-                ),
-              ),
-              _buildFeatureCard(
-                title: 'APK YÖNETİMİ',
-                subtitle: 'Uygulama yükle',
-                icon: Icons.android,
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF388E3C), Color(0xFF4CAF50)],
-                ),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => APKManagerScreen(adbClient: _adbClient),
-                  ),
-                ),
-              ),
-              _buildFeatureCard(
-                title: 'SİSTEM GÜNLÜKLERİ',
-                subtitle: 'Log & Çıktılar',
-                icon: Icons.terminal,
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF607D8B), Color(0xFF455A64)],
-                ),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const LogViewerScreen(),
-                  ),
-                ),
-              ),
-              _buildFeatureCard(
-                title: 'ACİL KURTARMA',
-                subtitle: 'Launcher düzelt',
-                icon: Icons.warning_amber,
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFB71C1C), Color(0xFFD32F2F)],
-                ),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        EmergencyRecoveryScreen(adbClient: _adbClient),
-                  ),
-                ),
-              ),
-            ],
+
+                const SizedBox(height: 12),
+
+                // ── AI Ayarları Küçük Kart ─────────────────────────────────
+                _buildAICard(),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  // ── AI Küçük Kart ──────────────────────────────────────────────────────────
+  Widget _buildAICard() {
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AISettingsScreen()),
+      ),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF4A148C), Color(0xFF7B1FA2)],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(60),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.psychology, color: Colors.white, size: 26),
+            SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'AI ASISTAN',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    letterSpacing: 1,
+                  ),
+                ),
+                Text(
+                  'Groq API ayarları & prompt',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+            Spacer(),
+            Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 14),
+          ],
+        ),
+      ),
     );
   }
 
