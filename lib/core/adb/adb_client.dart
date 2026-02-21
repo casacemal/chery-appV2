@@ -1,6 +1,9 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../shared/models/models.dart';
 import '../logger/black_box_logger.dart';
 import '../security/command_validator.dart';
@@ -14,6 +17,13 @@ class ADBClient extends ChangeNotifier {
   int? _connectedPort;
   bool _useRoot = false;
 
+  // ─── Kalıcı su Oturumu ───────────────────────────────────────────────────
+  Process? _suProcess;
+  StreamSubscription? _suStdoutSub;
+  StreamSubscription? _suStderrSub;
+  final _suOutputBuffer = StringBuffer();
+  final _suErrorBuffer = StringBuffer();
+
   final _logger = BlackBoxLogger();
   final _rateLimiter = RateLimiter();
 
@@ -21,14 +31,42 @@ class ADBClient extends ChangeNotifier {
   String? get connectedDevice => _connectedIp;
   bool get useRoot => _useRoot;
 
+  // ─── ADB Binary Yönetimi ─────────────────────────────────────────────────
+
+  static String? _adbBinaryPath;
+
+  static Future<String> _getAdbPath() async {
+    if (_adbBinaryPath != null) return _adbBinaryPath!;
+
+    final dir = await getApplicationSupportDirectory();
+    final adbFile = File('${dir.path}/adb');
+
+    if (!adbFile.existsSync()) {
+      // assets/adb dosyasını uygulama dizinine kopyala
+      final data = await rootBundle.load('assets/adb');
+      await adbFile.writeAsBytes(data.buffer.asUint8List());
+
+      // Çalıştırma izni ver (chmod 755)
+      final chmod = await Process.run('chmod', ['755', adbFile.path]);
+      debugPrint('chmod result: ${chmod.exitCode} ${chmod.stderr}');
+    }
+
+    _adbBinaryPath = adbFile.path;
+    debugPrint('ADB binary path: $_adbBinaryPath');
+    return _adbBinaryPath!;
+  }
+
   // ─── Root Yönetimi ───────────────────────────────────────────────────────
 
   Future<bool> enableRoot() async {
     if (!isConnected) return false;
 
     try {
+      final adbPath = await _getAdbPath();
+
+      // Önce adb root ile daemon root dene
       final result = await Process.run(
-        'adb',
+        adbPath,
         ['-s', '$_connectedIp:$_connectedPort', 'root'],
       ).timeout(const Duration(seconds: 10));
 
@@ -56,14 +94,14 @@ class ADBClient extends ChangeNotifier {
         return true;
       }
 
-      // adb root başarısız → Magisk/SuperSU üzerinden su -c dene
-      final suCheck = await _checkSuAvailable();
-      if (suCheck) {
+      // adb root başarısız → kalıcı su oturumu aç
+      final suOk = await _startSuSession();
+      if (suOk) {
         _useRoot = true;
         notifyListeners();
         await _logger.log(
           operation: LogOperation.connection,
-          details: 'Root mode su üzerinden etkinleştirildi',
+          details: 'Root mode su oturumu üzerinden etkinleştirildi',
           status: LogStatus.success,
           deviceIp: _connectedIp,
         );
@@ -88,20 +126,109 @@ class ADBClient extends ChangeNotifier {
     }
   }
 
-  Future<bool> _checkSuAvailable() async {
+  // ─── Kalıcı su Oturumu Başlat ─────────────────────────────────────────────
+
+  Future<bool> _startSuSession() async {
     try {
-      final result = await Process.run(
-        'adb',
-        ['-s', '$_connectedIp:$_connectedPort', 'shell', 'su -c "id"'],
-      ).timeout(const Duration(seconds: 5));
-      return result.exitCode == 0 &&
-          result.stdout.toString().contains('uid=0');
-    } catch (_) {
+      await _closeSuSession(); // Varsa eskiyi kapat
+
+      final adbPath = await _getAdbPath();
+
+      _suProcess = await Process.start(
+        adbPath,
+        ['-s', '$_connectedIp:$_connectedPort', 'shell', 'su'],
+      );
+
+      // stdout/stderr dinle
+      _suStdoutSub = _suProcess!.stdout
+          .transform(utf8.decoder)
+          .listen((data) => _suOutputBuffer.write(data));
+
+      _suStderrSub = _suProcess!.stderr
+          .transform(utf8.decoder)
+          .listen((data) => _suErrorBuffer.write(data));
+
+      // su oturumunun açıldığını test et
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final testResult = await _sendToSuSession('id');
+      if (testResult.output.contains('uid=0')) {
+        debugPrint('su oturumu başarıyla açıldı');
+        return true;
+      }
+
+      await _closeSuSession();
+      return false;
+    } catch (e) {
+      debugPrint('su oturumu hatası: $e');
+      await _closeSuSession();
       return false;
     }
   }
 
+  Future<void> _closeSuSession() async {
+    try {
+      _suProcess?.stdin.writeln('exit');
+      await _suProcess?.stdin.close();
+    } catch (_) {}
+    await _suStdoutSub?.cancel();
+    await _suStderrSub?.cancel();
+    _suProcess?.kill();
+    _suProcess = null;
+    _suOutputBuffer.clear();
+    _suErrorBuffer.clear();
+  }
+
+  // ─── su Oturumuna Komut Gönder ───────────────────────────────────────────
+
+  Future<CommandResult> _sendToSuSession(String command) async {
+    try {
+      // Benzersiz marker ile komutun bitişini tespit et
+      final marker = '___CMD_END_${DateTime.now().millisecondsSinceEpoch}___';
+
+      _suOutputBuffer.clear();
+      _suErrorBuffer.clear();
+
+      _suProcess!.stdin.writeln(command);
+      _suProcess!.stdin.writeln('echo "$marker"');
+
+      // Marker görünene kadar bekle (max 15 saniye)
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        final output = _suOutputBuffer.toString();
+        if (output.contains(marker)) {
+          // Marker'dan önceki kısmı al
+          final cleanOutput = output
+              .substring(0, output.indexOf(marker))
+              .trim();
+          return CommandResult(
+            success: true,
+            command: command,
+            output: cleanOutput,
+            error: null,
+          );
+        }
+      }
+
+      return CommandResult(
+        success: false,
+        command: command,
+        output: _suOutputBuffer.toString(),
+        error: 'Zaman aşımı',
+      );
+    } catch (e) {
+      // Oturum koptu, sıfırla
+      await _closeSuSession();
+      _useRoot = false;
+      notifyListeners();
+      return CommandResult(
+          success: false, command: command, output: '', error: 'su oturumu koptu: $e');
+    }
+  }
+
   void disableRoot() {
+    _closeSuSession();
     _useRoot = false;
     notifyListeners();
   }
@@ -127,9 +254,11 @@ class ADBClient extends ChangeNotifier {
           timeout: const Duration(seconds: 5));
       await socket.close();
 
+      final adbPath = await _getAdbPath();
+
       // Gerçek ADB bağlantısı
       final result = await Process.run(
-        'adb',
+        adbPath,
         ['connect', '$ip:$port'],
       ).timeout(const Duration(seconds: 10));
 
@@ -170,10 +299,14 @@ class ADBClient extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    // su oturumunu kapat
+    await _closeSuSession();
+
     if (_connectedIp != null) {
       try {
+        final adbPath = await _getAdbPath();
         await Process.run(
-          'adb',
+          adbPath,
           ['disconnect', '$_connectedIp:$_connectedPort'],
         ).timeout(const Duration(seconds: 5));
       } catch (_) {}
@@ -222,36 +355,51 @@ class ADBClient extends ChangeNotifier {
     }
 
     try {
-      // Root mode: daemon root mu (adb root), yoksa su -c mi?
-      final bool isDaemonRoot = _useRoot && await _isDaemonRoot();
-      final String actualCommand =
-          (_useRoot && !isDaemonRoot) ? 'su -c "$command"' : command;
+      CommandResult result;
 
-      final result = await Process.run(
-        'adb',
-        ['-s', '$_connectedIp:$_connectedPort', 'shell', actualCommand],
-      ).timeout(const Duration(seconds: 15));
+      if (_useRoot) {
+        // su oturumu yoksa veya kopmuşsa yeniden aç
+        if (_suProcess == null) {
+          final ok = await _startSuSession();
+          if (!ok) {
+            return CommandResult(
+                success: false,
+                command: command,
+                output: '',
+                error: 'su oturumu açılamadı');
+          }
+        }
+        result = await _sendToSuSession(command);
+      } else {
+        // Normal shell — adb shell komutu
+        final adbPath = await _getAdbPath();
+        final proc = await Process.run(
+          adbPath,
+          ['-s', '$_connectedIp:$_connectedPort', 'shell', command],
+        ).timeout(const Duration(seconds: 15));
 
-      final success = result.exitCode == 0;
-      final output = result.stdout.toString();
-      final error = result.stderr.toString();
-      final combinedOutput = output + (error.isNotEmpty ? '\nERROR: $error' : '');
+        final success = proc.exitCode == 0;
+        final output = proc.stdout.toString();
+        final error = proc.stderr.toString();
+
+        result = CommandResult(
+          success: success,
+          command: command,
+          output: output,
+          error: error.isNotEmpty ? error : (success ? null : 'Bilinmeyen hata'),
+        );
+      }
 
       await _logger.log(
         operation: LogOperation.command,
         details: 'Komut çalıştırıldı${_useRoot ? " [ROOT]" : ""}',
-        status: success ? LogStatus.success : LogStatus.failed,
-        command: actualCommand,
-        output: combinedOutput,
+        status: result.success ? LogStatus.success : LogStatus.failed,
+        command: command,
+        output: result.output,
         deviceIp: _connectedIp,
       );
 
-      return CommandResult(
-        success: success,
-        command: actualCommand,
-        output: output,
-        error: error.isNotEmpty ? error : (success ? null : 'Bilinmeyen hata'),
-      );
+      return result;
     } catch (e) {
       await _logger.log(
         operation: LogOperation.error,
@@ -265,18 +413,6 @@ class ADBClient extends ChangeNotifier {
     }
   }
 
-  Future<bool> _isDaemonRoot() async {
-    try {
-      final result = await Process.run(
-        'adb',
-        ['-s', '$_connectedIp:$_connectedPort', 'shell', 'id'],
-      ).timeout(const Duration(seconds: 5));
-      return result.stdout.toString().contains('uid=0');
-    } catch (_) {
-      return false;
-    }
-  }
-
   // ─── APK & İzin ──────────────────────────────────────────────────────────
 
   Future<CommandResult> installAPK(String apkPath) async {
@@ -286,8 +422,9 @@ class ADBClient extends ChangeNotifier {
     }
 
     try {
+      final adbPath = await _getAdbPath();
       final result = await Process.run(
-        'adb',
+        adbPath,
         ['-s', '$_connectedIp:$_connectedPort', 'install', '-r', '-g', apkPath],
       ).timeout(const Duration(minutes: 5));
 
