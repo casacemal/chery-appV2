@@ -1,8 +1,14 @@
 plugins {
     id "com.android.application"
     id "kotlin-android"
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
+}
+
+// key.properties dosyasını oku
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -11,27 +17,52 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_1_8
+        jvmTarget = "17"
     }
 
     defaultConfig {
         applicationId = "com.cherytools.chery_master_controller"
-        minSdkVersion = flutter.minSdkVersion
+        minSdkVersion 26                          // Android 8+ (ADB TCP için)
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+            } else {
+                // GitHub Actions'da secret'tan gelir, lokal key.properties yoksa debug
+                keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+                storeFile = System.getenv("KEY_STORE_FILE") ?
+                    file(System.getenv("KEY_STORE_FILE")) : null
+                storePassword = System.getenv("KEY_STORE_PASSWORD") ?: "android"
+            }
+        }
     }
 
     buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+        debug {
             signingConfig = signingConfigs.debug
+        }
+        release {
+            signingConfig = keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug     // key.properties yoksa debug key
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                'proguard-rules.pro'
         }
     }
 }
