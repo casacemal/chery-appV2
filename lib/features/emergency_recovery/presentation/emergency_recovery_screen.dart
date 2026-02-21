@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
+import 'package:provider/provider.dart'; // Provider paketini ekledik
 import '../../../core/adb/adb_client.dart';
 import '../../../core/constants/app_constants.dart';
 
 class EmergencyRecoveryScreen extends StatefulWidget {
-  final ADBClient adbClient;
-
-  const EmergencyRecoveryScreen({super.key, required this.adbClient});
+  // adbClient parametresini constructor'dan kaldırdık
+  const EmergencyRecoveryScreen({super.key});
 
   @override
   State<EmergencyRecoveryScreen> createState() =>
@@ -54,7 +54,11 @@ class _EmergencyRecoveryScreenState extends State<EmergencyRecoveryScreen> {
 
   Future<void> _runCommand(String command) async {
     setState(() => _isExecuting = true);
-    final result = await widget.adbClient.executeCommand(command);
+    
+    // İşlemden önce context üzerinden adbClient'ı alıyoruz
+    final adbClient = context.read<ADBClient>();
+    final result = await adbClient.executeCommand(command);
+    
     if (mounted) {
       setState(() => _isExecuting = false);
       if (result.success) {
@@ -66,7 +70,8 @@ class _EmergencyRecoveryScreenState extends State<EmergencyRecoveryScreen> {
   }
 
   bool _checkConnected() {
-    if (!widget.adbClient.isConnected) {
+    final adbClient = context.read<ADBClient>();
+    if (!adbClient.isConnected) {
       _showToast('Önce bir cihaza bağlanın!', isError: true);
       return false;
     }
@@ -100,8 +105,11 @@ class _EmergencyRecoveryScreenState extends State<EmergencyRecoveryScreen> {
   Future<void> _listAllLaunchers() async {
     if (!_checkConnected()) return;
 
+    // Await öncesi adbClient'ı alıyoruz
+    final adbClient = context.read<ADBClient>();
+
     setState(() => _isExecuting = true);
-    final result = await widget.adbClient.executeCommand(
+    final result = await adbClient.executeCommand(
       'pm query-activities -a android.intent.action.MAIN -c android.intent.category.HOME',
     );
     if (!mounted) return;
@@ -134,6 +142,9 @@ class _EmergencyRecoveryScreenState extends State<EmergencyRecoveryScreen> {
   Future<void> _resetLauncherPreference() async {
     if (!_checkConnected()) return;
 
+    // Await işlemlerinden önce adbClient'ı değişkene atıyoruz
+    final adbClient = context.read<ADBClient>();
+
     final ok = await _confirm(
       'Launcher Sıfırlama',
       'Varsayılan launcher tercihini sıfırlayacak ve Altın Komutu çalıştıracak.\n\nDevam edilsin mi?',
@@ -142,11 +153,11 @@ class _EmergencyRecoveryScreenState extends State<EmergencyRecoveryScreen> {
 
     setState(() => _isExecuting = true);
 
-    await widget.adbClient.executeCommand(
+    await adbClient.executeCommand(
       'pm clear-package-preferred-activities com.android.launcher3',
     );
     await Future.delayed(const Duration(milliseconds: 500));
-    await widget.adbClient.executeCommand(AppConstants.goldenCommand);
+    await adbClient.executeCommand(AppConstants.goldenCommand);
 
     if (mounted) {
       setState(() => _isExecuting = false);
